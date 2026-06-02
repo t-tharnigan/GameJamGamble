@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Gamble")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+bcfcddc35787935097d83238feeeb6660c55762b")]
 [assembly: System.Reflection.AssemblyProductAttribute("Gamble")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Gamble")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
