@@ -135,20 +135,63 @@ class Game
         public HashSet<Enemy> Hit = new HashSet<Enemy>(); // niet 2x dezelfde enemy raken
     }
 
+    enum PowerupType { Health, Speed, Shield }
+
+    class Powerup
+    {
+        public Vector2 Pos;
+        public PowerupType Type;
+        public float Age;
+
+        public Color GetColor()
+        {
+            switch (Type)
+            {
+                case PowerupType.Health: return new Color(220, 90, 90, 255);
+                case PowerupType.Speed:  return new Color(90, 220, 220, 255);
+                case PowerupType.Shield: return new Color(120, 180, 255, 255);
+            }
+            return Color.White;
+        }
+
+        public string GetName()
+        {
+            switch (Type)
+            {
+                case PowerupType.Health: return "Heal";
+                case PowerupType.Speed:  return "Speed";
+                case PowerupType.Shield: return "Shield";
+            }
+            return "Power";
+        }
+    }
+
     static Random rng = new Random();
 
     // ==================== STATE ====================
     static Vector2 playerPos = new Vector2(ScreenW / 2f, ScreenH / 2f);
-    static float playerSpeed = 260f;
+    static float playerBaseSpeed = 260f;
+    static float playerSpeedMultiplier = 1f;
     static int playerHealth = 100;
     static Weapon currentWeapon;
     static int coins = 0;
     static float fireCooldown = 0f;
     static float gameTime = 0f; // verstreken tijd in seconden, drijft de difficulty
+    static int killCount = 0;
+    static int highScore = 0;
+    static int Score => coins + killCount * 25 + (int)gameTime * 2;
+    static bool shieldActive = false;
+    static float shieldTimer = 0f;
+    static float speedBoostTimer = 0f;
+    static List<Weapon> inventory = new List<Weapon>();
+    static int selectedWeaponIndex = 0;
 
     static List<Bullet> bullets = new List<Bullet>();
     static List<Enemy> enemies = new List<Enemy>();
     static List<Chest> chests = new List<Chest>();
+    static List<Powerup> powerups = new List<Powerup>();
+
+    static float powerupSpawnTimer = 10f;
 
     static float enemySpawnTimer = 0f;
     static float chestSpawnTimer = 3f;
@@ -169,10 +212,14 @@ class Game
         Raylib.InitWindow(ScreenW, ScreenH, "Top-Down Shooter");
         Raylib.SetTargetFPS(60);
         currentWeapon = WeaponPool[0];
+        inventory.Add(currentWeapon);
 
         while (!Raylib.WindowShouldClose())
         {
             float dt = Raylib.GetFrameTime();
+            if (playerHealth <= 0 && Raylib.IsKeyPressed(KeyboardKey.R))
+                ResetGame();
+
             if (caseOpen) UpdateCase(dt);
             else if (playerHealth > 0) UpdateGame(dt);
             Draw();
@@ -185,6 +232,24 @@ class Game
     {
         gameTime += dt;
 
+        if (speedBoostTimer > 0f)
+        {
+            speedBoostTimer -= dt;
+            if (speedBoostTimer <= 0f) playerSpeedMultiplier = 1f;
+        }
+
+        if (shieldTimer > 0f)
+        {
+            shieldTimer -= dt;
+            if (shieldTimer <= 0f) shieldActive = false;
+        }
+
+        if (inventory.Count > 0 && selectedWeaponIndex >= 0 && selectedWeaponIndex < inventory.Count)
+            currentWeapon = inventory[selectedWeaponIndex];
+
+        if (Raylib.IsKeyPressed(KeyboardKey.Tab)) CycleWeapon(1);
+        if (Raylib.IsKeyPressed(KeyboardKey.Q)) CycleWeapon(-1);
+
         // Beweging
         Vector2 move = Vector2.Zero;
         if (Raylib.IsKeyDown(KeyboardKey.W)) move.Y -= 1;
@@ -192,7 +257,7 @@ class Game
         if (Raylib.IsKeyDown(KeyboardKey.A)) move.X -= 1;
         if (Raylib.IsKeyDown(KeyboardKey.D)) move.X += 1;
         if (move.LengthSquared() > 0) move = Vector2.Normalize(move);
-        playerPos += move * playerSpeed * dt;
+        playerPos += move * (playerBaseSpeed * playerSpeedMultiplier) * dt;
         playerPos.X = Math.Clamp(playerPos.X, 20, ScreenW - 20);
         playerPos.Y = Math.Clamp(playerPos.Y, 20, ScreenH - 20);
 
@@ -226,6 +291,23 @@ class Game
             }
         }
 
+        for (int i = powerups.Count - 1; i >= 0; i--)
+        {
+            powerups[i].Age += dt;
+            if (Vector2.Distance(playerPos, powerups[i].Pos) < 28)
+            {
+                ApplyPowerup(powerups[i]);
+                powerups.RemoveAt(i);
+            }
+        }
+
+        powerupSpawnTimer -= dt;
+        if (powerupSpawnTimer <= 0f && powerups.Count < 3)
+        {
+            SpawnPowerup();
+            powerupSpawnTimer = 12f;
+        }
+
         // Bullets
         foreach (var b in bullets)
         {
@@ -252,7 +334,7 @@ class Game
             if (dir.LengthSquared() > 0) dir = Vector2.Normalize(dir);
             e.Pos += dir * e.Def.Speed * dt;
             if (Vector2.Distance(e.Pos, playerPos) < e.Def.Radius + 16)
-                playerHealth -= e.Def.Damage;
+                playerHealth -= shieldActive ? 0 : e.Def.Damage;
         }
 
         // Bullet vs enemy (met pierce)
@@ -266,7 +348,11 @@ class Game
                 {
                     e.Health -= b.Damage;
                     b.Hit.Add(e);
-                    if (e.Health <= 0) coins += e.Def.Coins;
+                    if (e.Health <= 0)
+                    {
+                        coins += e.Def.Coins;
+                        killCount++;
+                    }
                     if (b.PierceLeft <= 0) { b.Alive = false; break; }
                     b.PierceLeft--;
                 }
@@ -395,6 +481,14 @@ class Game
         caseTimer = 0f; caseResultTimer = 0f; caseScroll = 0f;
 
         Weapon won = RollWeaponFromChest(caseTier);
+        if (!inventory.Contains(won))
+            inventory.Add(won);
+        if (won.Score() > currentWeapon.Score())
+        {
+            currentWeapon = won;
+            selectedWeaponIndex = inventory.IndexOf(won);
+        }
+
         caseStrip.Clear();
         int total = 50;
         caseWinIndex = total - 6;
@@ -448,6 +542,77 @@ class Game
         return matches[rng.Next(matches.Count)];
     }
 
+    static void ResetGame()
+    {
+        playerPos = new Vector2(ScreenW / 2f, ScreenH / 2f);
+        playerHealth = 100;
+        coins = 0;
+        fireCooldown = 0f;
+        gameTime = 0f;
+        killCount = 0;
+        enemySpawnTimer = 0f;
+        chestSpawnTimer = 3f;
+        bossTimer = 60f;
+        caseOpen = false;
+        caseFinished = false;
+        caseTimer = 0f;
+        caseResultTimer = 0f;
+        caseScroll = 0f;
+        currentWeapon = inventory.Count > 0 ? inventory[0] : WeaponPool[0];
+        selectedWeaponIndex = 0;
+        shieldActive = false;
+        shieldTimer = 0f;
+        speedBoostTimer = 0f;
+        playerSpeedMultiplier = 1f;
+        bullets.Clear();
+        enemies.Clear();
+        chests.Clear();
+        powerups.Clear();
+    }
+
+    static void SpawnPowerup()
+    {
+        PowerupType type = (PowerupType)rng.Next(3);
+        Vector2 pos;
+        do
+        {
+            pos = new Vector2(rng.Next(60, ScreenW - 60), rng.Next(60, ScreenH - 60));
+        } while (Vector2.Distance(pos, playerPos) < 120);
+        powerups.Add(new Powerup { Pos = pos, Type = type, Age = 0f });
+    }
+
+    static void ApplyPowerup(Powerup p)
+    {
+        switch (p.Type)
+        {
+            case PowerupType.Health:
+                playerHealth = Math.Min(100, playerHealth + 35);
+                break;
+            case PowerupType.Speed:
+                speedBoostTimer = 6f;
+                playerSpeedMultiplier = 1.6f;
+                break;
+            case PowerupType.Shield:
+                shieldActive = true;
+                shieldTimer = 6f;
+                break;
+        }
+    }
+
+    static void CycleWeapon(int direction)
+    {
+        if (inventory.Count == 0) return;
+        selectedWeaponIndex = (selectedWeaponIndex + direction + inventory.Count) % inventory.Count;
+        currentWeapon = inventory[selectedWeaponIndex];
+    }
+
+    static void SelectWeapon(int index)
+    {
+        if (index < 0 || index >= inventory.Count) return;
+        selectedWeaponIndex = index;
+        currentWeapon = inventory[selectedWeaponIndex];
+    }
+
     // ==================== TEKENEN ====================
     static void Draw()
     {
@@ -495,6 +660,11 @@ class Game
 
         // Speler
         Raylib.DrawCircleV(playerPos, 16, new Color(80, 160, 255, 255));
+        if (shieldActive)
+            Raylib.DrawCircleLines((int)playerPos.X, (int)playerPos.Y, 22, new Color(120, 220, 255, 150));
+        if (speedBoostTimer > 0f)
+            Raylib.DrawCircleLines((int)playerPos.X, (int)playerPos.Y, 26, new Color(150, 255, 150, 120));
+
         Vector2 mouse = Raylib.GetMousePosition();
         Vector2 aim = mouse - playerPos;
         if (aim.LengthSquared() > 0) aim = Vector2.Normalize(aim);
@@ -504,6 +674,14 @@ class Game
         Raylib.DrawText($"Coins: {coins}", 14, 14, 24, Color.Yellow);
         Raylib.DrawText($"HP: {Math.Max(0, playerHealth)}", 14, 44, 24, Color.White);
         Raylib.DrawText($"Wapen: {currentWeapon.Name}", 14, 74, 22, currentWeapon.Color());
+        Raylib.DrawText($"Score: {Score}", 14, 104, 22, new Color(135, 206, 235, 255));
+        Raylib.DrawText($"Kills: {killCount}", 14, 130, 18, new Color(0, 255, 0, 255));
+        Raylib.DrawText($"Highscore: {highScore}", 14, 154, 18, new Color(180, 210, 255, 255));
+        if (shieldActive)
+            Raylib.DrawText($"Shield: {shieldTimer:0.0}s", 14, 178, 18, new Color(0, 255, 255, 255));
+        if (speedBoostTimer > 0f)
+            Raylib.DrawText($"Speed: {speedBoostTimer:0.0}s", 14, 198, 18, new Color(0, 255, 0, 255));
+
         int mins = (int)gameTime / 60, secs = (int)gameTime % 60;
         string timeTxt = $"Tijd: {mins:0}:{secs:00}";
         Raylib.DrawText(timeTxt, ScreenW - Raylib.MeasureText(timeTxt, 22) - 14, 14, 22, Color.White);
@@ -512,9 +690,14 @@ class Game
 
         // Chest-prijslegende rechtsonder
         DrawChestLegend();
+        DrawPowerups();
+        DrawInventory();
 
         if (playerHealth <= 0)
+        {
             Raylib.DrawText("GAME OVER", ScreenW / 2 - 130, ScreenH / 2 - 30, 60, Color.Red);
+            Raylib.DrawText("[R] herstart", ScreenW / 2 - 100, ScreenH / 2 + 40, 24, new Color(200, 200, 200, 255));
+        }
 
         if (caseOpen) DrawCase();
 
@@ -535,6 +718,43 @@ class Game
             Raylib.DrawText($"{d.Label}: {d.Cost}c", x + 20, ly, 14, d.Color);
             i++;
         }
+    }
+
+    static void DrawPowerups()
+    {
+        foreach (var p in powerups)
+        {
+            float pulse = 1f + (float)Math.Sin(p.Age * 6f) * 0.1f;
+            Raylib.DrawCircleV(p.Pos, 18 * pulse, p.GetColor());
+            Raylib.DrawText(p.GetName(), (int)p.Pos.X - 18, (int)p.Pos.Y - 8, 12, Color.White);
+        }
+    }
+
+    static void DrawInventory()
+    {
+        int maxItems = Math.Min(inventory.Count, 6);
+        int boxW = 100, boxH = 60, spacing = 10;
+        int x = 14, y = ScreenH - 110;
+        int width = 20 + maxItems * boxW + Math.Max(0, maxItems - 1) * spacing;
+        Raylib.DrawRectangle(x - 10, y - 10, width, boxH + 40, new Color(0, 0, 0, 140));
+        Raylib.DrawText("Inventory", x, y - 8, 18, Color.White);
+
+        for (int i = 0; i < maxItems; i++)
+        {
+            int bx = x + i * (boxW + spacing);
+            Weapon w = inventory[i];
+            Color bg = i == selectedWeaponIndex ? new Color(200, 200, 255, 150) : new Color(50, 50, 60, 180);
+            Raylib.DrawRectangle(bx, y, boxW, boxH, bg);
+            Raylib.DrawRectangleLines(bx, y, boxW, boxH, w.Color());
+            Raylib.DrawText($"{i + 1}. {w.Name}", bx + 6, y + 8, 14, Color.White);
+            Raylib.DrawText($"{w.Rarity}", bx + 6, y + 28, 12, w.Color());
+            Raylib.DrawText($"DPS: {(int)w.Score()}", bx + 6, y + 44, 10, new Color(200, 200, 200, 255));
+        }
+
+        if (inventory.Count > maxItems)
+            Raylib.DrawText($"+{inventory.Count - maxItems} more", x + width - 90, y + 32, 14, new Color(200, 200, 200, 255));
+
+        Raylib.DrawText("[Tab/Q/E] switch weapon", x, y + boxH + 12, 12, new Color(200, 200, 200, 255));
     }
 
     static void DrawCase()
